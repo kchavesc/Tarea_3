@@ -1,0 +1,392 @@
+---
+title: "Tarea 3"
+author: "Kenneth Chaves Cruz"
+format: html
+embed-resources: true
+toc: true
+lang: es 
+---
+# Introducción
+El análisis de la temperatura del aire en diferentes estaciones meteorológicas facilita la comparación de las condiciones observadas entre regiones.
+
+En este trabajo se analizan datos preliminares de temperatura máxima y mínima del 17 de agosto de 2026, correspondientes a estaciones meteorológicas de Costa Rica. Los datos fueron obtenidos del Instituto Meteorológico Nacional (IMN) e incluyen el nombre y la ubicación de cada estación, la región climática, las temperaturas máxima y mínima en grados Celsius y la hora de toma de los datos. Para el proyecto final se van a agregar otras
+fechas.
+
+A partir de esta información se busca responder las siguientes preguntas:
+
+1. ¿Cómo se distribuyen las temperaturas máximas registradas entre las estaciones meteorológicas?
+
+2. ¿Cómo varía la temperatura máxima promedio entre las regiones climáticas representadas en los datos?
+
+3. ¿Qué relación existe entre la temperatura máxima y la temperatura mínima registradas en cada estación?
+
+4. ¿Como se distribuyen las estaciones meteorológicas disponibles entre las provincias de Costa Rica?
+
+Para el analisis se utilizaron dos capas. La primera representa las estaciones meteorológicas como puntos, a
+partir de las coordenadas de longitud y latitud se asumio el sistema de coordenadas el sistema WGS84 pendiente de confirmación en la fuente original. La segunda corresponde a las provincias, disponible en el 
+repositorio del curso (IGN, s. f.). Corresponde a una capa del Instituto Geográfico Nacional (ING). Contiene 7 entidades con geometría MULTIPPLYGON y los atributos de código y nombre de provincia. Su sistema de referencia es CR-SIRGAS / CRTM05
+
+Para responder las preguntas se utilizan una tabla interactiva, gráficos y mapas que permitan explorar y comparar
+los registros. Los resultados describen las estaciones y la fecha incluidas en el archivo; por lo tanto, no
+representan promedios climatológicos. 
+
+# Importación y preparación de los datos
+
+## Carga de paquetes
+Se cargan los paquetes necesarios para importar, explorar y analizar los datos, y para crear tablas y gráficos interactivos.
+```{r}
+#| label: carga-paquetes-datos
+#| message: false
+#| warning: false
+
+library(tidyverse)
+library(sf)
+library(plotly)
+library(DT)
+library(readxl)
+library(leaflet)
+
+```
+## Importacion de los datos
+Para poder cargar los datos se tuvo que realizar unos pasos adicionales a los realizados en clase ya que no tenia un archivo CSV y si convertia el archivo original a CSV daba un error ya que se perdian datos. Los datos se encuentran alojados en GitHub en un archivo Excel.
+```{r}
+#| label: carga-datos
+#| message: false
+#| warning: false
+
+url <- "https://raw.githubusercontent.com/kchavesc/Tarea_3/main/temp_trd.xlsx"
+# Debido a que el archivo original es en formato .xlsx use el codigo a continuación 
+# para poder usar ese archivo, ya que si lo pasaba a .CSV perdia formato y se hacia un 
+# desastre
+archivo_temporal <- tempfile(fileext = ".xlsx")
+download.file(url, archivo_temporal, mode = "wb")
+temperatura <- read_excel(archivo_temporal, skip = 3)
+# head me permite explorar las primeras lineas del archivo.
+head(temperatura)
+```
+
+## Importación de las provincias
+Se importa la capa de provincias de Costa Rica del Instituto Geográfico Nacional (IGN), 
+disponible en el repositorio del curso.
+
+```{r}
+#| label: carga-provincias
+#| message: false
+
+provincias <- st_read(
+  "https://raw.githubusercontent.com/pf0953-programacionr/2026-ii/main/datos/provincias.gpkg",
+  quiet = TRUE
+)
+```
+
+## Exploración de las provincias
+
+Se revisan los atributos, el sistema de referencia de coordenadas y el tipo de geometría de la capa.
+
+```{r}
+#| label: exploracion-provincias
+#| message: false
+#| warning: false
+nrow(provincias)
+names(provincias)
+st_crs(provincias)
+st_geometry_type(provincias)
+```
+
+## Capa de estaciones
+Las estaciones se representan como puntos. Se asume que las coordenadas están en WGS84 ya que están localizadas
+en territorio costarricense.
+
+```{r}
+#| label: creacion-estaciones
+
+estaciones <- temperatura |>
+  filter(!is.na(Longitud), !is.na(Latitud)) |>
+  st_as_sf(coords = c("Longitud", "Latitud"), crs = 4326)
+
+nrow(estaciones)
+st_crs(estaciones)
+```
+
+## Transformación de coordenadas
+Se procede a transformar las estaciones a CRTM05 para que queden con el mismo sistema de referencia de la capa de provincias.
+
+```{r}
+#| label: transformacion-estaciones
+
+estaciones_crtm05 <- st_transform(estaciones, 8908)
+
+st_crs(estaciones_crtm05)
+```
+
+
+## Identificar la provincia de cada estación
+
+A continuación se identifica la provincia en la que se ubica cada estación.
+
+```{r}
+#| label: union-estaciones-provincias
+
+estaciones_provincia <- st_join(estaciones_crtm05, provincias)
+
+head(estaciones_provincia)
+```
+
+## Cantidad de estaciones por región
+Para saber su distribución se procede a contar las estaciones asociadas a cada provincia.
+
+```{r}
+#| label: conteo-provincias
+
+conteo_provincias <- estaciones_provincia |>
+  st_drop_geometry() |>
+  filter(!is.na(provincia)) |>
+  group_by(provincia) |>
+  summarize(estaciones = n())
+
+conteo_provincias
+```
+De las 94 estaciones con coordenadas, 92 se asociaron espacialmente con alguna provincia. Guanacaste presentó
+la mayor cantidad de estaciones asociadas con 24, mientras que Heredia presentó la menor cantidad con 4.
+Las estaciones Herradura y Puntarenas no coincidieron con los polígonos de la capa utilizada, por lo que no se tomaron en cuenta en el conteo provincial. Para el proyecto final se va a tratar de resolver el problema.
+
+# Tabla interactiva
+La siguiente tabla presenta las temperaturas máximas y mínimas registradas en las estaciones meteorológicas, junto con su ubicación, región climática y hora de toma de datos. La información corresponde al 17 de agosto de 2026 y tiene carácter preliminar.
+```{r}
+#| label: datatable
+# El siguiente código crea la tabla interactiva y me permite asignar los 
+# nombres en español, ya que por defecto los muestra en inglés 
+datatable(
+  temperatura,
+  rownames = FALSE,
+  options = list(
+    language = list(
+      search = "Buscar:",
+      lengthMenu = "Mostrar _MENU_ registros",
+      info = "Mostrando _START_ a _END_ de _TOTAL_ registros",
+      infoEmpty = "No hay registros disponibles",
+      infoFiltered = "(filtrado de _MAX_ registros)",
+      zeroRecords = "No se encontraron registros",
+      paginate = list(
+        previous = "Anterior",
+        `next` = "Siguiente"
+      )
+    )
+  )
+) |> # Las siguientes lineas permiten definir la cantidad de decimales
+  formatRound(
+    columns = c("Longitud", "Latitud"),
+    digits = 3,
+    mark = ".",
+    dec.mark = ","
+  ) |>
+  formatRound(
+    columns = c("Temperatura Máxima (°C)", "Temperatura Mínima (°C)"),
+    digits = 1,
+    mark = ".",
+    dec.mark = ","
+  )
+```
+
+
+# Gráficos
+Se generan un histograma, un gráfico de barras, uno de dispersión interactivo, un mapa con la ubicación de las estaciones y un mapa interactivo..
+
+## Histograma
+
+El siguiente histograma muestra la distribución de las temperaturas máximas registradas en las estaciones meteorológicas del país. 
+
+
+```{r}
+#| label: fig-histograma
+#| fig-cap: "Histograma de temperatura máxima."
+ggplot(temperatura, aes(x = `Temperatura Máxima (°C)`)) +
+  geom_histogram(binwidth = 2, boundary = 0, fill = "red", color = "black") +
+  labs(
+    title = "Distribución de la temperatura máxima por estación",
+    x = "Temperatura máxima (°C)",
+    y = "Número de estaciones",
+    caption = "Fuente: Instituto Meteorológico Nacional."
+  )
+```
+
+Se observa que poco más de 20 estaciones registraron temperaturas máximas entre 30 y 32 °C, mientras que alrededor de 17 presentaron temperaturas entre los 32 - 34 °C.
+
+## Gráfico de barras
+El siguiente gráfico de barras muestra el promedio de la temperatura máxima por región climática.
+```{r}
+#| label: promedio-regiones
+# El siguiente código agrupa las regiones climáticas y calcula el valor 
+#promedio de la tempet\ratura máxima
+promedio_regiones <- temperatura |>
+  group_by(`Región Climática`) |>
+  summarize(
+    temperatura_promedio = mean(`Temperatura Máxima (°C)`, na.rm = TRUE)
+  )
+```
+
+Una vez obtenido el promedio se procede a graficar los datos.
+
+```{r}
+#| label: fig-barras-regiones
+#| fig-cap: "Gráfico de temperatura máxima promedio por región."
+ggplot(
+  promedio_regiones,
+  aes(x = `Región Climática`, y = temperatura_promedio)
+) +
+  geom_col(fill = "steelblue", color = "black") +
+  labs(
+    title = "Temperatura máxima promedio por región climática",
+    x = "Región climática",
+    y = "Temperatura máxima promedio (°C)",
+    caption = "Fuente: Instituto Meteorológico Nacional."
+  )
+```
+Se aprecia claramente como la temperatura máxima promedio más alta se presenta en el Pacífico Norte, el Valle Central y Caribe Sur presentan valores más frescos.
+
+## Dispersión interactivo
+ El siguiente es un gráfico de dispersión interactivo. Cada punto representaría una estación; al colocar el cursor encima, se muestran su nombre, región y temperaturas máxima y mínima.
+ 
+```{r}
+#| label: fig-dispersion-temperatura
+#| fig-cap: "Gráfico de dispersión temperatura máxima vs mínima."
+grafico_dispersion <- ggplot(
+  temperatura,
+  aes(
+    x = `Temperatura Mínima (°C)`,
+    y = `Temperatura Máxima (°C)`,
+    text = paste( # aqui se define el nombre de las etiquetas y el valor 
+                 # que va a mostrar
+      "Estación:", Estación,
+      "<br>Región:", `Región Climática`,
+      "<br>Temperatura mínima:", `Temperatura Mínima (°C)`, "°C",
+      "<br>Temperatura máxima:", `Temperatura Máxima (°C)`, "°C"
+    )
+  )
+) +
+  geom_point(color = "steelblue", size = 2, alpha = 0.8) +
+  labs(
+    title = "Temperaturas máxima y mínima por estación",
+    x = "Temperatura mínima (°C)",
+    y = "Temperatura máxima (°C)",
+    caption = "Fuente: Instituto Meteorológico Nacional."
+  )
+
+ggplotly(grafico_dispersion, tooltip = "text") |>
+  config(displaylogo = FALSE)
+```
+
+Se aprecia como la relación entre máxima y mínima es más alta en el Pacífico Norte y más baja en las zonas montañosas.
+
+## Mapa de ubicación de las estaciones meteorológicas
+El siguiente mapa muestra la ubicación de las estaciones meteorológicas.
+
+```{r}
+#| label: fig-estaciones-provincias
+#| fig-cap: "Ubicación de las estaciones meteorológicas y límites provinciales de Costa Rica."
+
+ggplot() +
+  geom_sf(
+    data = provincias,
+    fill = "grey95",
+    color = "grey50"
+  ) +
+  geom_sf(
+  data = estaciones_crtm05,
+  aes(color = "Estaciones meteorológicas"),
+  size = 1.5,
+  alpha = 0.8
+) +
+scale_color_manual(
+  name = "Simbología",
+  values = c("Estaciones meteorológicas" = "blue")
+) + # la siguiente parte establece limites de latitud y longitud para que la Isla del Coco no se incluya en mapa.
+  coord_sf( 
+  crs = st_crs(8908),
+  default_crs = st_crs(4326),
+  xlim = c(-86, -82.5),
+  ylim = c(8, 11.3)
+) +
+  labs(
+    title = "Ubicación de las estaciones meteorológicas",
+    caption = "Fuentes: IMN (estaciones) e IGN (provincias)."
+  ) +
+  theme_minimal()
+```
+
+El mapa muestra la ubicación de las estaciones meteorológicas incluidas en el archivo. Se observa una mayor agrupación de puntos en el centro del país y en el noroeste, mientras que en otras zonas las estaciones aparecen más dispersas. La vista se limita al territorio continental de Costa Rica.
+
+## Temperatura máxima
+
+El siguiente mapa muestra la temperatura máxima de cada estación. Al colocar el mouse sobre el punto se puede 
+consultar el nombre de la estación y su temperatura.
+
+```{r}
+#| label: prepara-mapa-temperatura
+
+estaciones_mapa <- estaciones |>
+  filter(!is.na(`Temperatura Máxima (°C)`))
+
+colores_temperatura <- colorNumeric(
+  palette = "YlOrRd",
+  domain = estaciones_mapa$`Temperatura Máxima (°C)`)
+```
+```{r}
+#| label: fig-mapa-temperatura
+#| fig-cap: "Temperatura máxima registrada en las estaciones meteorológicas el 17 de agosto de 2026."
+
+leaflet(estaciones_mapa) |>
+  addProviderTiles(
+    providers$OpenStreetMap,
+    group = "OpenStreetMap"
+  ) |>
+  addProviderTiles(
+    providers$Esri.WorldImagery,
+    group = "Imagen satelital"
+  ) |>
+  addCircleMarkers(
+    color = ~colores_temperatura(`Temperatura Máxima (°C)`),
+    fillOpacity = 0.8,
+    radius = 5,
+    stroke = FALSE,
+    label = ~paste(
+      "Estación:", Estación,
+      "| Temperatura máxima:", `Temperatura Máxima (°C)`, "°C"
+    ),
+    clusterOptions = markerClusterOptions()
+  ) |>
+  addLayersControl(
+    baseGroups = c("OpenStreetMap", "Imagen satelital")
+  ) |>
+  addLegend(
+    pal = colores_temperatura,
+    values = ~`Temperatura Máxima (°C)`,
+    title = "Temperatura máxima (°C)"
+  ) |>
+  addScaleBar(position = "bottomleft")
+```
+
+El mapa muestra la ubicación de las estaciones meteorológicas y la temperatura máxima registrada en cada una el 17 de agosto de 2026. Al acercar el mapa se pueden observar las estaciones individualmente y consultar sus valores. Los círculos numerados agrupan estaciones cercanas. Se puede apreciar como las estaciones ubicadas en sectores bajos y cercanos a la costa son las que tienen colores rojos más intensos, asociados a temperaturas más altas.
+Fuente de los datos: Instituto Meteorológico Nacional (IMN).
+
+
+# Conclusiones
+El análisis de los datos preliminares de temperatura del 17 de agosto de 2026 permitió comparar las condiciones registradas en las estaciones meteorológicas incluidas en el archivo.
+
+En cuanto a la distribución de la temperatura máxima, el histograma muestra que la mayor cantidad de estaciones registró valores entre 30°C - 32°C. Por otro lado, las temperaturas máximas menos frecuentes se encontraron en los extremos del histograma.
+
+Al comparar las regiones climáticas, el Pacífico Norte presentó la temperatura máxima promedio más alta, con alrededor de los 34°C, mientras que el Valle Central registró el promedio más bajo, con alrededor de los 27°C. Estos promedios corresponden a las estaciones disponibles en cada región.
+
+El gráfico de dispersión muestra que la relación entre máximas y mínimas es mayor en el Pacífico Norte y menor en las zonas montañosas.
+
+Finalmente el mapa interactivo permite identificar la ubicación y la temperatura máxima registrada en cada estación. Al comparar los valores se observan temperaturas máximas más altas en estaciones del Pacífico Norte, mientras que en estaciones del Valle Central se presentan valores más bajos, coincidiendo con lo mostrado en el gráfico de dispersión. Para el mapa del proyecto final se agregará la capa de las temperaturas mínimas.
+
+Como limitaciones, los datos corresponden a una única fecha y tienen carácter preliminar. Además, la cantidad y distribución de las estaciones pueden ser diferentes entre regiones. Por ello, los resultados describen únicamente los registros analizados y no deben interpretarse como promedios climatológicos ni como una caracterización completa de cada región. Además, las coordenadas de las estaciones se trabajaron bajo el supuesto de que están expresadas en WGS84.
+
+# Referencias
+Instituto Geográfico Nacional. (s. f.). Provincias de Costa Rica [Conjunto de datos geoespaciales]. Repositorio del curso PF-0953 Programación en R. https://raw.githubusercontent.com/pf0953-programacionr/2026-ii/main/datos/provincias.gpkg
+
+# Declaración de uso de IA
+Para la elaboración de este trabajo se utilizó ChatGPT como apoyo en la explicación y corrección de código en R asi como para depurar código de la tabla interactiva, la creación de los gráficos y el mapa interactivo. Adicionalmente se utilizó para orientar la estructura del documento y mejorar la redacción de algunos apartados.
+
+El código y los resultados fueron revisados por el autor, quién es responsable de su comprensión, interpretación y presentación final.
